@@ -57,4 +57,70 @@ HTML_TEMPLATE = """
 {% if player %}<h2>{{ player.name }} - {{ player.location }}</h2><div class="log">
 {% for message in game_log %}<p>{{ message }}</p>{% else %}<p>仙路漫漫，請開始你的行動...</p>{% endfor %}</div>
 <div class="status-panel"><div>境界: {{ player.realm }} {{ player.level }} 層</div><div>壽元: {{ player.lifespan }} 年</div><div>氣血: {{ player.stats.氣血 }}/{{ player.stats.最大氣血 }}</div><div>修為: {{ player.xp }}/{{ player.max_xp }}</div></div>
-<div class="actions">{% if not player.in_combat %}<form action="/action" method="post"><button class="btn"
+<div class="actions">{% if not player.in_combat %}<form action="/action" method="post"><button class="btn" type="submit" name="action" value="修煉">修煉</button></form><form action="/action" method="post"><button class="btn" type="submit" name="action" value="探索">探索</button></form><form action="/action" method="post"><button class="btn" type="submit" name="action" value="狀態">詳細狀態</button></form><form action="/action" method="post"><button class="btn" type="submit" name="action" value="旅行">前往他處</button></form>
+{% else %}<form action="/action" method="post"><button class="btn btn-danger" type="submit" name="action" value="攻擊">攻擊</button></form><form action="/action" method="post"><button class="btn" type="submit" name="action" value="逃跑">逃跑</button></form>{% endif %}</div>
+<div style="text-align:center;margin-top:20px;"><a href="/reset">開啟新的輪迴</a></div>
+{% else %}<div class="char-creation"><h2>開啟仙途</h2><form action="/" method="post"><input type="text" name="name" placeholder="請賜道號" required><br><input type="text" name="gender" placeholder="請定性別 (男/女)" required><br><input class="btn" type="submit" value="踏入此界"></form></div>{% endif %}
+</div></body></html>"""
+
+def get_player():
+    return Player.from_dict(session['player_data']) if 'player_data' in session else None
+def save_player(player): session['player_data'] = player.to_dict()
+
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    game_log = session.pop('game_log', [])
+    if request.method == 'POST':
+        player = Player(request.form['name'], request.form['gender'])
+        if random.random() < 0.1:
+            const_name = random.choice(list(CONSTITUTION_DATA.keys())); player.constitution = {"name": const_name}
+            game_log.append(f"你似乎是萬中無一的【{const_name}】!")
+        game_log.append(f"{player.name}，你的故事，將從【青石鎮】開始。")
+        save_player(player); session['game_log'] = game_log; return redirect(url_for('index'))
+    return render_template_string(HTML_TEMPLATE, player=get_player(), game_log=game_log)
+
+@app.route('/action', methods=['POST'])
+def handle_action():
+    player = get_player(); game_log = []
+    if not player: return redirect(url_for('index'))
+    action = request.form.get('action')
+
+    if action == "修煉": game_log.append(player.add_xp(10 + player.level * 2))
+    elif action == "探索":
+        if player.location == "青雲山脈":
+            monster_name = random.choice(list(MORTAL_MONSTERS.keys()))
+            player.in_combat = True; player.combat_target = {"name": monster_name, "hp": MORTAL_MONSTERS[monster_name]['stats']['氣血']}
+            game_log.append(f"你遭遇了【{monster_name}】！")
+        else: game_log.append("城鎮之中，沒什麼好探索的。")
+    elif action == "攻擊":
+        if player.in_combat:
+            target_info = player.combat_target; monster_data = MORTAL_MONSTERS[target_info['name']]
+            damage = max(1, player.stats["肉身強度"] + random.randint(-2, 2)); target_info['hp'] -= damage
+            game_log.append(f"你對【{target_info['name']}】造成了 {damage} 點傷害。")
+            if target_info['hp'] <= 0:
+                game_log.append(f"你擊敗了【{target_info['name']}】!"); player.in_combat = False
+                game_log.append(player.add_xp(monster_data.get('xp', 10)))
+                for item, chance in monster_data.get('drops', {}).items():
+                    if random.random() < chance: player.add_item(item); game_log.append(f"你獲得了【{item}】。")
+            else:
+                monster_damage = max(1, monster_data['stats']['肉身強度'] - player.stats['防禦']); player.stats['氣血'] -= monster_damage
+                game_log.append(f"【{target_info['name']}】對你造成了 {monster_damage} 點傷害。")
+                if player.stats['氣血'] <= 0:
+                    player.stats['氣血'] = 1; player.location = "青石鎮"; player.in_combat = False
+                    game_log.append("你重傷倒下...醒來時回到了青石鎮。")
+    elif action == "逃跑":
+        game_log.append("你成功逃離了戰鬥！"); player.in_combat = False
+    elif action == "狀態":
+        game_log.append(f"道號: {player.name}, 壽元: {player.lifespan}"); game_log.append(f"境界: {player.realm} {player.level}層"); game_log.append(f"修為: {player.xp}/{player.max_xp}")
+    elif action == "旅行":
+        current_loc = player.location; destination = LOCATION_DATA[current_loc]['travel_to'][0]
+        player.location = destination; game_log.append(f"你動身前往【{destination}】。")
+    
+    save_player(player); session['game_log'] = game_log; return redirect(url_for('index'))
+
+@app.route('/reset')
+def reset():
+    session.clear(); return redirect(url_for('index'))
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=False)
